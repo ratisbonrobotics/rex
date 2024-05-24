@@ -58,5 +58,7 @@ color = jnp.array([255, 0, 0])  # Red color
 rendered_image = render(vertices, faces, width, height, color)
 
 # Save the rendered image
-image = Image.fromarray(rendered_image.astype(jnp.uint8), mode='RGB')
+import numpy as np
+np_image = np.array(rendered_image, dtype=np.uint8) * 255  # Ensure it's 0 or 255 for binary image
+image = Image.fromarray(np_image.astype(jnp.uint8), mode='RGB')
 image.save('rendered_image.png')

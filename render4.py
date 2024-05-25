@@ -3,7 +3,6 @@ import jax
 import numpy as onp
 from PIL import Image
 from jax import numpy as jp
-from renderer.types import Vec3f, Vec2f
 from renderer import Model as RendererMesh
 from renderer import ModelObject as Instance
 from renderer import LightParameters as Light

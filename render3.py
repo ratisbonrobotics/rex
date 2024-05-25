@@ -1,25 +1,17 @@
-import functools
-from typing import Iterable, NamedTuple, Optional
-
+import re
 import jax
-from jax import numpy as jp
 import numpy as onp
-import matplotlib.animation as animation
-import matplotlib.pyplot as plt
 from PIL import Image
-
-from renderer import CameraParameters as Camera
-from renderer import LightParameters as Light
+from typing import Optional
+from jax import numpy as jp
+from renderer.types import Vec3f, Vec2f
 from renderer import Model as RendererMesh
 from renderer import ModelObject as Instance
-from renderer import ShadowParameters as Shadow
-from renderer import Renderer, merge_objects, transpose_for_display
+from renderer import LightParameters as Light
 from renderer.geometry import rotation_matrix
-
-
-import re
-
-from renderer.types import Vec3f, Vec2f
+from renderer import CameraParameters as Camera
+from renderer import ShadowParameters as Shadow
+from renderer import Renderer, transpose_for_display
 
 #@title ## Download and Load Models
 def make_model(fileContent: list[str], diffuse_map, specular_map) -> RendererMesh:

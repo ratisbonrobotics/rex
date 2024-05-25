@@ -3,17 +3,17 @@ import jax
 import numpy as onp
 from PIL import Image
 from jax import numpy as jp
-from renderer import Model as RendererMesh
-from renderer import ModelObject as Instance
-from renderer import LightParameters as Light
+from renderer import Model
+from renderer import ModelObject
+from renderer import LightParameters
 from renderer.geometry import rotation_matrix
-from renderer import CameraParameters as Camera
-from renderer import ShadowParameters as Shadow
+from renderer import CameraParameters
+from renderer import ShadowParameters
 from renderer import Renderer, transpose_for_display
 from numpngw import write_apng
 
 # Function to create a model from file content and textures
-def make_model(fileContent: list[str], diffuse_map, specular_map) -> RendererMesh:
+def make_model(fileContent: list[str], diffuse_map, specular_map) -> Model:
     verts, norms, uv, faces, faces_norm, faces_uv = [], [], [], [], [], []
     _float, _integer, _one_vertex = re.compile(r"(-?\d+\.?\d*(?:e[+-]\d+)?)"), re.compile(r"\d+"), re.compile(r"\d+/\d*/\d*")
 
@@ -37,7 +37,7 @@ def make_model(fileContent: list[str], diffuse_map, specular_map) -> RendererMes
             faces_norm.append(face_norm)
             faces_uv.append(face_uv)
 
-    return RendererMesh(
+    return Model(
         verts=jp.array(verts),
         norms=jp.array(norms),
         uvs=jp.array(uv),
@@ -71,10 +71,10 @@ degrees = jax.lax.iota(float, frames) * 360. / frames
 @jax.default_matmul_precision("float32")
 def render_instances(instances, width, height, camera, light=None, shadow=None, camera_target=None, enable_shadow=True):
     if light is None:
-        light = Light(direction=jp.array([0.57735, -0.57735, 0.57735]), ambient=0.1, diffuse=0.85, specular=0.05)
+        light = LightParameters(direction=jp.array([0.57735, -0.57735, 0.57735]), ambient=0.1, diffuse=0.85, specular=0.05)
     if shadow is None and enable_shadow:
         assert camera_target is not None, 'camera_target is None'
-        shadow = Shadow(centre=camera_target)
+        shadow = ShadowParameters(centre=camera_target)
     elif not enable_shadow:
         shadow = None
 
@@ -84,7 +84,7 @@ def render_instances(instances, width, height, camera, light=None, shadow=None, 
 # Function to generate compiled rendering
 def gen_compile_render(instances):
     eye, center, up = jp.array((0, 0, 3.)), jp.array((0, 0, 0)), jp.array((0, 1, 0))
-    camera = Camera(viewWidth=canvas_width, viewHeight=canvas_height, position=eye, target=center, up=up)
+    camera = CameraParameters(viewWidth=canvas_width, viewHeight=canvas_height, position=eye, target=center, up=up)
     
     def render(batched_instances):
         def _render(instances):
@@ -101,7 +101,7 @@ def gen_compile_render(instances):
 
 # Rotate model
 def rotate(model, rotation_axis, degree):
-    instance = Instance(model=model)
+    instance = ModelObject(model=model)
     return instance.replace_with_orientation(rotation_matrix=rotation_matrix(rotation_axis, degree))
 
 batch_rotation = jax.jit(jax.vmap(lambda degree: rotate(model, rotation_axis, degree))).lower(degrees).compile()

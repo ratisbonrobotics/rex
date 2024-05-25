@@ -74,10 +74,7 @@ light = LightParameters(direction=jp.array([0.57735, -0.57735, 0.57735]), ambien
 shadow = ShadowParameters(centre=center)
 
 @jax.default_matmul_precision("float32")
-def render_instances(instances, width, height, camera, light, shadow, enable_shadow=True):
-    if not enable_shadow:
-        shadow = None
-
+def render_instances(instances, width, height, camera, light, shadow):
     img = Renderer.get_camera_image(objects=instances, light=light, camera=camera, width=width, height=height, shadow_param=shadow, colour_default=jp.zeros(3, dtype=jp.single))
     return jax.lax.clamp(0., img, 1.)
 
@@ -91,7 +88,7 @@ instances = [batch_rotation(degrees)]
 @jax.jit
 def render(batched_instances):
     def _render(instances):
-        _render = jax.jit(render_instances, static_argnames=("width", "height", "enable_shadow"), inline=True)
+        _render = jax.jit(render_instances, static_argnames=("width", "height"), inline=True)
         img = _render(instances=instances, width=canvas_width, height=canvas_height, camera=camera, light=light, shadow=shadow)
         return transpose_for_display((img * 255).astype(jp.uint8))
 

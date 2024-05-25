@@ -98,3 +98,6 @@ render_compiled = jax.jit(render).lower(instances).compile()
 images = list(map(onp.asarray, jax.device_get(render_compiled(instances))))
 
 write_apng('animation.png', images, delay=1/30.)
+
+# ffmpeg -i animation.png intermediate.gif
+# gifsicle --optimize=3 --delay=5 intermediate.gif > output.gif

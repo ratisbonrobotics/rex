@@ -3,7 +3,6 @@ import jax
 import numpy as onp
 from PIL import Image
 from jax import numpy as jp
-from renderer import ModelObject
 from renderer import LightParameters
 from renderer.geometry import rotation_matrix
 from renderer import CameraParameters
@@ -11,8 +10,15 @@ from renderer import ShadowParameters
 from renderer import Renderer, transpose_for_display
 from numpngw import write_apng
 from typing import NamedTuple, TypeAlias, Optional
-from jaxtyping import Array, Float, Integer
+from jaxtyping import Array, Float, Integer, Bool
+from renderer.geometry import transform_matrix_from_rotation
 
+Vec2f: TypeAlias = Float[Array, "2"]
+Vec3f: TypeAlias = Float[Array, "3"]
+ModelMatrix: TypeAlias = Float[Array, "4 4"]
+Vec4f: TypeAlias = Float[Array, "4"]
+
+BoolV: TypeAlias = Bool[Array, ""]
 FaceIndices: TypeAlias = Integer[Array, "faces 3"]
 Vertices: TypeAlias = Float[Array, "vertices 3"]
 Normals: TypeAlias = Float[Array, "normals 3"]
@@ -20,6 +26,8 @@ UVCoordinates: TypeAlias = Float[Array, "uv_counts 2"]
 Texture: TypeAlias = Float[Array, "textureWidth textureHeight channel"]
 SpecularMap: TypeAlias = Float[Array, "textureWidth textureHeight"]
 NormalMap: TypeAlias = Float[Array, "textureWidth textureHeight 3"]
+
+FALSE_ARRAY: BoolV = jax.lax.full((), False, dtype=jax.numpy.bool_)
 
 class Model(NamedTuple):
     verts: Vertices
@@ -37,6 +45,29 @@ class Model(NamedTuple):
         if specular_map is None:
             specular_map = jax.lax.full(diffuse_map.shape[:2], 2.0)
         return cls(verts=verts, norms=norms, uvs=uvs, faces=faces, faces_norm=faces, faces_uv=faces, diffuse_map=diffuse_map, specular_map=specular_map)
+
+class ModelObject(NamedTuple):
+    model: Model
+    local_scaling: Vec3f = jax.numpy.ones(3)
+    transform: ModelMatrix = jax.numpy.identity(4)
+    double_sided: BoolV = FALSE_ARRAY
+
+    def replace_with_position(self, position: Vec3f) -> "ModelObject":
+        return self._replace(transform=self.transform.at[:3, 3].set(position))
+
+    def replace_with_orientation(self, orientation: Optional[Vec4f] = None, rotation_matrix: Optional[Float[Array, "3 3"]] = None) -> "ModelObject":
+        if rotation_matrix is None:
+            if orientation is None:
+                orientation = jax.numpy.array((0.0, 0.0, 0.0, 1.0))
+            rotation_matrix = transform_matrix_from_rotation(orientation)
+
+        return self._replace(transform=self.transform.at[:3, :3].set(rotation_matrix))
+
+    def replace_with_local_scaling(self, local_scaling: Vec3f) -> "ModelObject":
+        return self._replace(local_scaling=local_scaling)
+
+    def replace_with_double_sided(self, double_sided: BoolV) -> "ModelObject":
+        return self._replace(double_sided=double_sided)
 
 # Load model and textures
 obj_path, texture_path, spec_path = "african_head.obj", "african_head_diffuse.tga", "african_head_spec.tga"
@@ -79,7 +110,7 @@ with open(obj_path, 'r') as file:
             faces_norm.append(face_norm)
             faces_uv.append(face_uv)
 
-model = Model(verts=jp.array(verts), norms=jp.array(norms), uvs=jp.array(uv), faces=jp.array(faces), faces_norm=jp.array(faces_norm), faces_uv=jp.array(faces_uv),mdiffuse_map=jax.numpy.swapaxes(texture, 0, 1)[:, ::-1, :], specular_map=jax.numpy.swapaxes(specular_map, 0, 1)[:, ::-1])
+model = Model(verts=jp.array(verts), norms=jp.array(norms), uvs=jp.array(uv), faces=jp.array(faces), faces_norm=jp.array(faces_norm), faces_uv=jp.array(faces_uv), diffuse_map=jax.numpy.swapaxes(texture, 0, 1)[:, ::-1, :], specular_map=jax.numpy.swapaxes(specular_map, 0, 1)[:, ::-1])
 
 canvas_width, canvas_height, frames, rotation_axis = 1920, 1080, 30, "Y"
 rotation_axis = dict(X=(1., 0., 0.), Y=(0., 1., 0.), Z=(0., 0., 1.))[rotation_axis]

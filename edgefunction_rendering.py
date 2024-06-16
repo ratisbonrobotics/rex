@@ -22,14 +22,15 @@ def edge_function(v0, v1, p):
 
 def render_triangles(vertices, faces, width, height):
     image = Image.new('RGB', (width, height), color='white')
+    depth_buffer = np.full((width, height), float('inf'))
 
     for face in faces:
         v0, v1, v2 = [vertices[i] for i in face]
 
         # Convert vertex coordinates to screen space
-        v0 = ((v0[0] + 1) * width / 2, (v0[1] + 1) * height / 2)
-        v1 = ((v1[0] + 1) * width / 2, (v1[1] + 1) * height / 2)
-        v2 = ((v2[0] + 1) * width / 2, (v2[1] + 1) * height / 2)
+        v0 = ((v0[0] + 1) * width / 2, (v0[1] + 1) * height / 2, v0[2])
+        v1 = ((v1[0] + 1) * width / 2, (v1[1] + 1) * height / 2, v1[2])
+        v2 = ((v2[0] + 1) * width / 2, (v2[1] + 1) * height / 2, v2[2])
 
         # Generate random color for the triangle
         color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
@@ -49,7 +50,19 @@ def render_triangles(vertices, faces, width, height):
                 w2 = edge_function(v0, v1, p)
 
                 if w0 >= 0 and w1 >= 0 and w2 >= 0:
-                    image.putpixel((x, y), color)
+                    # Calculate barycentric coordinates
+                    area = edge_function(v0, v1, v2)
+                    w0 /= area
+                    w1 /= area
+                    w2 /= area
+
+                    # Interpolate depth value
+                    depth = w0 * v0[2] + w1 * v1[2] + w2 * v2[2]
+
+                    # Perform depth test
+                    if depth < depth_buffer[x, y]:
+                        depth_buffer[x, y] = depth
+                        image.putpixel((x, y), color)
 
     return image
 

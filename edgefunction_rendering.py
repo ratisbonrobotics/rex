@@ -21,7 +21,7 @@ def edge_function(v0, v1, p):
     return (p[0] - v0[0]) * (v1[1] - v0[1]) - (p[1] - v0[1]) * (v1[0] - v0[0])
 
 def render_triangles(vertices, faces, width, height):
-    image = Image.new('RGB', (width, height), color='white')
+    image = Image.new('RGB', (width, height), color='black')
     depth_buffer = np.full((width, height), float('inf'))
 
     for face in faces:
@@ -73,6 +73,7 @@ def main():
 
     vertices, faces = parse_obj_file(input_file)
     image = render_triangles(vertices, faces, width, height)
+    image = image.rotate(180)  # Rotate the image by 180 degrees
     image.save(output_file)
 
 if __name__ == '__main__':

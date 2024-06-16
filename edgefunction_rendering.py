@@ -1,6 +1,65 @@
 import numpy as np
 from PIL import Image
 
+def identMat4f():
+    return np.eye(4, dtype=np.float32)
+
+def multMat4f(a, b):
+    return np.dot(a, b)
+
+def translMat4f(tx, ty, tz):
+    return np.array([
+        [1, 0, 0, tx],
+        [0, 1, 0, ty],
+        [0, 0, 1, tz],
+        [0, 0, 0, 1]
+    ], dtype=np.float32)
+
+def xRotMat4f(angle):
+    c = np.cos(angle)
+    s = np.sin(angle)
+    return np.array([
+        [1, 0, 0, 0],
+        [0, c, -s, 0],
+        [0, s, c, 0],
+        [0, 0, 0, 1]
+    ], dtype=np.float32)
+
+def yRotMat4f(angle):
+    c = np.cos(angle)
+    s = np.sin(angle)
+    return np.array([
+        [c, 0, s, 0],
+        [0, 1, 0, 0],
+        [-s, 0, c, 0],
+        [0, 0, 0, 1]
+    ], dtype=np.float32)
+
+def zRotMat4f(angle):
+    c = np.cos(angle)
+    s = np.sin(angle)
+    return np.array([
+        [c, -s, 0, 0],
+        [s, c, 0, 0],
+        [0, 0, 1, 0],
+        [0, 0, 0, 1]
+    ], dtype=np.float32)
+
+def scaleMat4f(sx, sy, sz):
+    return np.array([
+        [sx, 0, 0, 0],
+        [0, sy, 0, 0],
+        [0, 0, sz, 0],
+        [0, 0, 0, 1]
+    ], dtype=np.float32)
+
+def modelMat4f(tx, ty, tz, rx, ry, rz, sx, sy, sz):
+    modelmatrix = identMat4f()
+    modelmatrix = multMat4f(translMat4f(tx, ty, tz), modelmatrix)
+    modelmatrix = multMat4f(multMat4f(multMat4f(xRotMat4f(rx), yRotMat4f(ry)), zRotMat4f(rz)), modelmatrix)
+    modelmatrix = multMat4f(scaleMat4f(sx, sy, sz), modelmatrix)
+    return modelmatrix
+
 def parse_obj_file(file_path):
     vertices = []
     texture_coords = []
@@ -28,13 +87,18 @@ def parse_obj_file(file_path):
 def edge_function(v0, v1, p):
     return (p[0] - v0[0]) * (v1[1] - v0[1]) - (p[1] - v0[1]) * (v1[0] - v0[0])
 
-def render_triangles(vertices, texture_coords, faces, texture, width, height):
+def render_triangles(vertices, texture_coords, faces, texture, width, height, model_matrix):
     image = Image.new('RGB', (width, height), color='black')
     depth_buffer = np.full((width, height), float('-inf'))
 
     for face in faces:
         v0, v1, v2 = [vertices[i] for i, _ in face]
         vt0, vt1, vt2 = [texture_coords[i] for _, i in face if i is not None]
+
+        # Apply model matrix to vertices
+        v0 = np.dot(model_matrix, np.append(v0, 1))[:3]
+        v1 = np.dot(model_matrix, np.append(v1, 1))[:3]
+        v2 = np.dot(model_matrix, np.append(v2, 1))[:3]
 
         # Convert vertex coordinates to screen space
         v0 = ((v0[0] + 1) * width / 2, (1 - v0[1]) * height / 2, v0[2])
@@ -87,7 +151,14 @@ def main():
 
     vertices, texture_coords, faces = parse_obj_file(input_file)
     texture = Image.open(texture_file)
-    image = render_triangles(vertices, texture_coords, faces, texture, width, height)
+    
+    # Create a model matrix
+    tx, ty, tz = 0, 0, 0
+    rx, ry, rz = 0, 1, 0
+    sx, sy, sz = 1, 1, 1
+    model_matrix = modelMat4f(tx, ty, tz, rx, ry, rz, sx, sy, sz)
+    
+    image = render_triangles(vertices, texture_coords, faces, texture, width, height, model_matrix)
     image.save(output_file)
 
 if __name__ == '__main__':

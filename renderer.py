@@ -29,7 +29,7 @@ def edge_function(v0, v1, p):
     return (p[0] - v0[0]) * (v1[1] - v0[1]) - (p[1] - v0[1]) * (v1[0] - v0[0])
 
 def render_triangles(vertices, texture_coords, faces, texture, width, height):
-    image = Image.new('RGB', (width, height), color='black')
+    image = np.zeros((height, width, 3), dtype=np.uint8)
     depth_buffer = np.full((width, height), float('-inf'))
 
     for face in faces:
@@ -74,22 +74,17 @@ def render_triangles(vertices, texture_coords, faces, texture, width, height):
                         ty = 1 - (w0 * vt0[1] + w1 * vt1[1] + w2 * vt2[1])  # Invert v-coordinate
 
                         # Sample texture color
-                        color = texture.getpixel((int(tx * texture.width), int(ty * texture.height)))
-                        image.putpixel((x, y), color)
+                        color = texture[int(ty * texture.shape[0]), int(tx * texture.shape[1])]
+                        image[y, x] = color
 
     return image
 
 def main():
-    input_file = 'obj/african_head.obj'
-    texture_file = 'prev/african_head_diffuse.tga'
-    output_file = 'output.png'
-    width, height = 800, 600
-
-    vertices, texture_coords, faces = parse_obj_file(input_file)
-    texture = Image.open(texture_file)
-
-    image = render_triangles(vertices, texture_coords, faces, texture, width, height)
-    image.save(output_file)
+    vertices, texture_coords, faces = parse_obj_file('obj/african_head.obj')
+    texture = np.array(Image.open('prev/african_head_diffuse.tga'))
+    
+    image = render_triangles(vertices, texture_coords, faces, texture, 800, 600)
+    Image.fromarray(image).save('output.png')
 
 if __name__ == '__main__':
     main()

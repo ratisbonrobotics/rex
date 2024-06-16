@@ -25,6 +25,36 @@ def parse_obj_file(file_path):
 
     return np.array(vertices), np.array(texture_coords), np.array(faces)
 
+def rasterize_pixel(x, y, v0, v1, v2, vt0, vt1, vt2, texture, depth_buffer):
+    p = (x, y)
+    w0 = (p[0] - v1[0]) * (v2[1] - v1[1]) - (p[1] - v1[1]) * (v2[0] - v1[0])
+    w1 = (p[0] - v2[0]) * (v0[1] - v2[1]) - (p[1] - v2[1]) * (v0[0] - v2[0])
+    w2 = (p[0] - v0[0]) * (v1[1] - v0[1]) - (p[1] - v0[1]) * (v1[0] - v0[0])
+
+    if w0 >= 0 and w1 >= 0 and w2 >= 0:
+        # Calculate barycentric coordinates
+        area = (v2[0] - v0[0]) * (v1[1] - v0[1]) - (v2[1] - v0[1]) * (v1[0] - v0[0])
+        w0 /= area
+        w1 /= area
+        w2 /= area
+
+        # Interpolate depth value
+        depth = w0 * v0[2] + w1 * v1[2] + w2 * v2[2]
+
+        # Perform depth test
+        if depth > depth_buffer[x, y]:
+            depth_buffer[x, y] = depth
+
+            # Interpolate texture coordinates
+            tx = w0 * vt0[0] + w1 * vt1[0] + w2 * vt2[0]
+            ty = 1 - (w0 * vt0[1] + w1 * vt1[1] + w2 * vt2[1])  # Invert v-coordinate
+
+            # Sample texture color
+            color = texture[int(ty * texture.shape[0]), int(tx * texture.shape[1])]
+            return color
+
+    return None
+
 def render_triangles(vertices, texture_coords, faces, texture, width, height):
     image = np.zeros((height, width, 3), dtype=np.uint8)
     depth_buffer = np.full((width, height), float('-inf'))
@@ -47,32 +77,9 @@ def render_triangles(vertices, texture_coords, faces, texture, width, height):
         # Rasterize the triangle
         for y in range(min_y, max_y + 1):
             for x in range(min_x, max_x + 1):
-                p = (x, y)
-                w0 = (p[0] - v1[0]) * (v2[1] - v1[1]) - (p[1] - v1[1]) * (v2[0] - v1[0])
-                w1 = (p[0] - v2[0]) * (v0[1] - v2[1]) - (p[1] - v2[1]) * (v0[0] - v2[0])
-                w2 = (p[0] - v0[0]) * (v1[1] - v0[1]) - (p[1] - v0[1]) * (v1[0] - v0[0])
-
-                if w0 >= 0 and w1 >= 0 and w2 >= 0:
-                    # Calculate barycentric coordinates
-                    area = (v2[0] - v0[0]) * (v1[1] - v0[1]) - (v2[1] - v0[1]) * (v1[0] - v0[0])
-                    w0 /= area
-                    w1 /= area
-                    w2 /= area
-
-                    # Interpolate depth value
-                    depth = w0 * v0[2] + w1 * v1[2] + w2 * v2[2]
-
-                    # Perform depth test
-                    if depth > depth_buffer[x, y]:
-                        depth_buffer[x, y] = depth
-
-                        # Interpolate texture coordinates
-                        tx = w0 * vt0[0] + w1 * vt1[0] + w2 * vt2[0]
-                        ty = 1 - (w0 * vt0[1] + w1 * vt1[1] + w2 * vt2[1])  # Invert v-coordinate
-
-                        # Sample texture color
-                        color = texture[int(ty * texture.shape[0]), int(tx * texture.shape[1])]
-                        image[y, x] = color
+                color = rasterize_pixel(x, y, v0, v1, v2, vt0, vt1, vt2, texture, depth_buffer)
+                if color is not None:
+                    image[y, x] = color
 
     return image
 

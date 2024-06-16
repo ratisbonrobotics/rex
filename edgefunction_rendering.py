@@ -1,9 +1,9 @@
 import numpy as np
 from PIL import Image
-import random
 
 def parse_obj_file(file_path):
     vertices = []
+    texture_coords = []
     faces = []
 
     with open(file_path, 'r') as file:
@@ -11,29 +11,35 @@ def parse_obj_file(file_path):
             if line.startswith('v '):
                 vertex = [float(coord) for coord in line.split()[1:]]
                 vertices.append(vertex)
+            elif line.startswith('vt '):
+                texture_coord = [float(coord) for coord in line.split()[1:]]
+                texture_coords.append(texture_coord)
             elif line.startswith('f '):
-                face = [int(vertex_index.split('/')[0]) - 1 for vertex_index in line.split()[1:]]
+                face = []
+                for vertex_index in line.split()[1:]:
+                    indices = vertex_index.split('/')
+                    vertex_index = int(indices[0]) - 1
+                    texture_index = int(indices[1]) - 1 if len(indices) > 1 else None
+                    face.append((vertex_index, texture_index))
                 faces.append(face)
 
-    return np.array(vertices), np.array(faces)
+    return np.array(vertices), np.array(texture_coords), np.array(faces)
 
 def edge_function(v0, v1, p):
     return (p[0] - v0[0]) * (v1[1] - v0[1]) - (p[1] - v0[1]) * (v1[0] - v0[0])
 
-def render_triangles(vertices, faces, width, height):
+def render_triangles(vertices, texture_coords, faces, texture, width, height):
     image = Image.new('RGB', (width, height), color='black')
-    depth_buffer = np.full((width, height), float('-inf'))  # Initialize depth buffer with negative infinity
+    depth_buffer = np.full((width, height), float('-inf'))
 
     for face in faces:
-        v0, v1, v2 = [vertices[i] for i in face]
+        v0, v1, v2 = [vertices[i] for i, _ in face]
+        vt0, vt1, vt2 = [texture_coords[i] for _, i in face if i is not None]
 
         # Convert vertex coordinates to screen space
         v0 = ((v0[0] + 1) * width / 2, (1 - v0[1]) * height / 2, v0[2])
         v1 = ((v1[0] + 1) * width / 2, (1 - v1[1]) * height / 2, v1[2])
         v2 = ((v2[0] + 1) * width / 2, (1 - v2[1]) * height / 2, v2[2])
-
-        # Generate random color for the triangle
-        color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
 
         # Calculate bounding box
         min_x = max(0, int(min(v0[0], v1[0], v2[0])))
@@ -62,17 +68,26 @@ def render_triangles(vertices, faces, width, height):
                     # Perform depth test
                     if depth > depth_buffer[x, y]:
                         depth_buffer[x, y] = depth
+
+                        # Interpolate texture coordinates
+                        tx = w0 * vt0[0] + w1 * vt1[0] + w2 * vt2[0]
+                        ty = 1 - (w0 * vt0[1] + w1 * vt1[1] + w2 * vt2[1])  # Invert v-coordinate
+
+                        # Sample texture color
+                        color = texture.getpixel((int(tx * texture.width), int(ty * texture.height)))
                         image.putpixel((x, y), color)
 
     return image
 
 def main():
     input_file = 'obj/african_head.obj'
+    texture_file = 'prev/african_head_diffuse.tga'
     output_file = 'output.png'
     width, height = 800, 600
 
-    vertices, faces = parse_obj_file(input_file)
-    image = render_triangles(vertices, faces, width, height)
+    vertices, texture_coords, faces = parse_obj_file(input_file)
+    texture = Image.open(texture_file)
+    image = render_triangles(vertices, texture_coords, faces, texture, width, height)
     image.save(output_file)
 
 if __name__ == '__main__':

@@ -80,8 +80,8 @@ def render_triangles(vertices, texture_coords, faces, texture, width, height):
     return image
 
 def main():
-    vertices, texture_coords, faces = parse_obj_file('obj/african_head.obj')
-    texture = np.array(Image.open('prev/african_head_diffuse.tga'))
+    vertices, texture_coords, faces = parse_obj_file('african_head.obj')
+    texture = np.array(Image.open('african_head_diffuse.tga'))
     
     image = render_triangles(vertices, texture_coords, faces, texture, 800, 600)
     Image.fromarray(image).save('output.png')

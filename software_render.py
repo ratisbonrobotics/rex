@@ -25,9 +25,6 @@ def parse_obj_file(file_path):
 
     return np.array(vertices), np.array(texture_coords), np.array(faces)
 
-def edge_function(v0, v1, p):
-    return (p[0] - v0[0]) * (v1[1] - v0[1]) - (p[1] - v0[1]) * (v1[0] - v0[0])
-
 def render_triangles(vertices, texture_coords, faces, texture, width, height):
     image = np.zeros((height, width, 3), dtype=np.uint8)
     depth_buffer = np.full((width, height), float('-inf'))
@@ -51,13 +48,13 @@ def render_triangles(vertices, texture_coords, faces, texture, width, height):
         for y in range(min_y, max_y + 1):
             for x in range(min_x, max_x + 1):
                 p = (x, y)
-                w0 = edge_function(v1, v2, p)
-                w1 = edge_function(v2, v0, p)
-                w2 = edge_function(v0, v1, p)
+                w0 = (p[0] - v1[0]) * (v2[1] - v1[1]) - (p[1] - v1[1]) * (v2[0] - v1[0])
+                w1 = (p[0] - v2[0]) * (v0[1] - v2[1]) - (p[1] - v2[1]) * (v0[0] - v2[0])
+                w2 = (p[0] - v0[0]) * (v1[1] - v0[1]) - (p[1] - v0[1]) * (v1[0] - v0[0])
 
                 if w0 >= 0 and w1 >= 0 and w2 >= 0:
                     # Calculate barycentric coordinates
-                    area = edge_function(v0, v1, v2)
+                    area = (v2[0] - v0[0]) * (v1[1] - v0[1]) - (v2[1] - v0[1]) * (v1[0] - v0[0])
                     w0 /= area
                     w1 /= area
                     w2 /= area

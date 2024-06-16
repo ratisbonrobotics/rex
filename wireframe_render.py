@@ -1,5 +1,5 @@
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image
 
 def parse_obj_file(file_path):
     vertices = []
@@ -16,9 +16,32 @@ def parse_obj_file(file_path):
 
     return np.array(vertices), np.array(faces)
 
+def draw_line(image, x1, y1, x2, y2, color):
+    width, height = image.size
+    x1, y1 = max(0, min(x1, width - 1)), max(0, min(y1, height - 1))
+    x2, y2 = max(0, min(x2, width - 1)), max(0, min(y2, height - 1))
+
+    dx = abs(x2 - x1)
+    dy = abs(y2 - y1)
+    sx = 1 if x1 < x2 else -1
+    sy = 1 if y1 < y2 else -1
+    err = dx - dy
+
+    while True:
+        if 0 <= x1 < width and 0 <= y1 < height:
+            image.putpixel((x1, y1), color)
+        if x1 == x2 and y1 == y2:
+            break
+        e2 = 2 * err
+        if e2 > -dy:
+            err -= dy
+            x1 += sx
+        if e2 < dx:
+            err += dx
+            y1 += sy
+
 def render_wireframe(vertices, faces, width, height):
     image = Image.new('RGB', (width, height), color='white')
-    draw = ImageDraw.Draw(image)
 
     for face in faces:
         for i in range(len(face)):
@@ -28,7 +51,7 @@ def render_wireframe(vertices, faces, width, height):
             x1, y1 = int((v1[0] + 1) * width / 2), int((v1[1] + 1) * height / 2)
             x2, y2 = int((v2[0] + 1) * width / 2), int((v2[1] + 1) * height / 2)
 
-            draw.line((x1, y1, x2, y2), fill='black', width=1)
+            draw_line(image, x1, y1, x2, y2, (0, 0, 0))
 
     return image
 

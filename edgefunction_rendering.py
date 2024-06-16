@@ -22,15 +22,15 @@ def edge_function(v0, v1, p):
 
 def render_triangles(vertices, faces, width, height):
     image = Image.new('RGB', (width, height), color='black')
-    depth_buffer = np.full((width, height), float('inf'))
+    depth_buffer = np.full((width, height), float('-inf'))  # Initialize depth buffer with negative infinity
 
     for face in faces:
         v0, v1, v2 = [vertices[i] for i in face]
 
         # Convert vertex coordinates to screen space
-        v0 = ((v0[0] + 1) * width / 2, (v0[1] + 1) * height / 2, v0[2])
-        v1 = ((v1[0] + 1) * width / 2, (v1[1] + 1) * height / 2, v1[2])
-        v2 = ((v2[0] + 1) * width / 2, (v2[1] + 1) * height / 2, v2[2])
+        v0 = ((v0[0] + 1) * width / 2, (1 - v0[1]) * height / 2, v0[2])
+        v1 = ((v1[0] + 1) * width / 2, (1 - v1[1]) * height / 2, v1[2])
+        v2 = ((v2[0] + 1) * width / 2, (1 - v2[1]) * height / 2, v2[2])
 
         # Generate random color for the triangle
         color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
@@ -60,7 +60,7 @@ def render_triangles(vertices, faces, width, height):
                     depth = w0 * v0[2] + w1 * v1[2] + w2 * v2[2]
 
                     # Perform depth test
-                    if depth < depth_buffer[x, y]:
+                    if depth > depth_buffer[x, y]:
                         depth_buffer[x, y] = depth
                         image.putpixel((x, y), color)
 
@@ -73,7 +73,6 @@ def main():
 
     vertices, faces = parse_obj_file(input_file)
     image = render_triangles(vertices, faces, width, height)
-    image = image.rotate(180)  # Rotate the image by 180 degrees
     image.save(output_file)
 
 if __name__ == '__main__':

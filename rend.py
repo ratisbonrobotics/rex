@@ -47,27 +47,31 @@ def render_triangles(vertices, texture_coords, faces, texture, width, height):
         e12 = v2[1] - v1[1], v1[0] - v2[0], v2[0] * v1[1] - v1[0] * v2[1]
         e20 = v0[1] - v2[1], v2[0] - v0[0], v0[0] * v2[1] - v2[0] * v0[1]
 
-        # Rasterize the triangle
-        for y in range(max(min_y, 0), min(max_y + 1, height)):
-            for x in range(max(min_x, 0), min(max_x + 1, width)):
-                w0 = e12[0] * (x + 0.5) + e12[1] * (y + 0.5) + e12[2]
-                w1 = e20[0] * (x + 0.5) + e20[1] * (y + 0.5) + e20[2]
-                w2 = e01[0] * (x + 0.5) + e01[1] * (y + 0.5) + e01[2]
+        # Generate x and y coordinates using meshgrid
+        x, y = np.meshgrid(np.arange(max(min_x, 0), min(max_x + 1, width)),
+                           np.arange(max(min_y, 0), min(max_y + 1, height)))
 
-                if w0 >= 0 and w1 >= 0 and w2 >= 0:
-                    w = w0 + w1 + w2
-                    w0, w1, w2 = w0 / w, w1 / w, w2 / w
+        # Calculate barycentric coordinates using broadcasting
+        w0 = e12[0] * (x + 0.5) + e12[1] * (y + 0.5) + e12[2]
+        w1 = e20[0] * (x + 0.5) + e20[1] * (y + 0.5) + e20[2]
+        w2 = e01[0] * (x + 0.5) + e01[1] * (y + 0.5) + e01[2]
 
-                    depth = w0 * v0[2] + w1 * v1[2] + w2 * v2[2]
+        # Create a mask for pixels inside the triangle
+        mask = (w0 >= 0) & (w1 >= 0) & (w2 >= 0)
 
-                    if depth > depth_buffer[y, x]:
-                        depth_buffer[y, x] = depth
+        # Calculate depth and texture coordinates using broadcasting
+        w = w0 + w1 + w2
+        w0, w1, w2 = w0 / w, w1 / w, w2 / w
+        depth = w0 * v0[2] + w1 * v1[2] + w2 * v2[2]
+        tx = w0 * vt0[0] + w1 * vt1[0] + w2 * vt2[0]
+        ty = 1 - (w0 * vt0[1] + w1 * vt1[1] + w2 * vt2[1])
 
-                        tx = w0 * vt0[0] + w1 * vt1[0] + w2 * vt2[0]
-                        ty = 1 - (w0 * vt0[1] + w1 * vt1[1] + w2 * vt2[1])
-
-                        color = texture[int(ty * texture.shape[0]), int(tx * texture.shape[1])]
-                        image[y, x] = color
+        # Update depth buffer and image for pixels inside the triangle
+        update_mask = mask & (depth > depth_buffer[y, x])
+        depth_buffer[y[update_mask], x[update_mask]] = depth[update_mask]
+        color = texture[np.clip(ty[update_mask] * texture.shape[0], 0, texture.shape[0] - 1).astype(int),
+                        np.clip(tx[update_mask] * texture.shape[1], 0, texture.shape[1] - 1).astype(int)]
+        image[y[update_mask], x[update_mask]] = color
 
     return image
 

@@ -144,8 +144,8 @@ def render_triangles(vertices, texture_coords, faces, texture, width, height, mo
     return image
 
 def main():
-    input_file = 'obj/african_head.obj'
-    texture_file = 'prev/african_head_diffuse.tga'
+    input_file = 'african_head.obj'
+    texture_file = 'african_head_diffuse.tga'
     output_file = 'output.png'
     width, height = 800, 600
 

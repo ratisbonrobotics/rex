@@ -1,3 +1,0 @@
-african_head_diffuse.tga filter=lfs diff=lfs merge=lfs -text
-african_head_nm_tangent.tga filter=lfs diff=lfs merge=lfs -text
-african_head_spec.tga filter=lfs diff=lfs merge=lfs -text

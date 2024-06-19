@@ -1,5 +1,6 @@
 import numpy as np
 from PIL import Image
+from numba import jit
 
 def parse_obj_file(file_path: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     vertices = []
@@ -25,14 +26,17 @@ def parse_obj_file(file_path: str) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
     return np.array(vertices), np.array(texture_coords), np.array(faces)
 
+@jit(nopython=True)
 def convert_to_screen_space(v: np.ndarray, width: int, height: int) -> tuple:
     return ((v[0] + 1) * width / 2, (1 - v[1]) * height / 2, v[2])
 
+@jit(nopython=True)
 def calculate_bounding_box(v0: tuple, v1: tuple, v2: tuple) -> tuple[int, int, int, int]:
     min_x, max_x = int(min(v0[0], v1[0], v2[0])), int(max(v0[0], v1[0], v2[0]))
     min_y, max_y = int(min(v0[1], v1[1], v2[1])), int(max(v0[1], v1[1], v2[1]))
     return min_x, max_x, min_y, max_y
 
+@jit(nopython=True)
 def calculate_edge_function_coefficients(v0: tuple, v1: tuple, v2: tuple) -> tuple[tuple, tuple, tuple]:
     e01 = v1[1] - v0[1], v0[0] - v1[0], v1[0] * v0[1] - v0[0] * v1[1]
     e12 = v2[1] - v1[1], v1[0] - v2[0], v2[0] * v1[1] - v1[0] * v2[1]
@@ -40,19 +44,21 @@ def calculate_edge_function_coefficients(v0: tuple, v1: tuple, v2: tuple) -> tup
     return e01, e12, e20
 
 def generate_coordinates(min_x: int, max_x: int, min_y: int, max_y: int, width: int, height: int) -> tuple[np.ndarray, np.ndarray]:
-    x, y = np.meshgrid(np.arange(max(min_x, 0), min(max_x + 1, width)),
-                       np.arange(max(min_y, 0), min(max_y + 1, height)))
+    x, y = np.meshgrid(np.arange(max(min_x, 0), min(max_x + 1, width)), np.arange(max(min_y, 0), min(max_y + 1, height)))
     return x, y
 
+@jit(nopython=True)
 def calculate_barycentric_coordinates(x: np.ndarray, y: np.ndarray, e01: tuple, e12: tuple, e20: tuple) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     w0 = e12[0] * (x + 0.5) + e12[1] * (y + 0.5) + e12[2]
     w1 = e20[0] * (x + 0.5) + e20[1] * (y + 0.5) + e20[2]
     w2 = e01[0] * (x + 0.5) + e01[1] * (y + 0.5) + e01[2]
     return w0, w1, w2
 
+@jit(nopython=True)
 def create_triangle_mask(w0: np.ndarray, w1: np.ndarray, w2: np.ndarray) -> np.ndarray:
     return (w0 >= 0) & (w1 >= 0) & (w2 >= 0)
 
+@jit(nopython=True)
 def calculate_depth_and_texture_coordinates(w0: np.ndarray, w1: np.ndarray, w2: np.ndarray, v0: tuple, v1: tuple, v2: tuple, vt0: tuple, vt1: tuple, vt2: tuple) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     w = w0 + w1 + w2
     w0, w1, w2 = w0 / w, w1 / w, w2 / w

@@ -1,2 +1,2 @@
 # rex
-A jax renderer
+A jax rasterization renderer

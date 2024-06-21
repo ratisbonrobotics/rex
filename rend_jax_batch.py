@@ -90,6 +90,7 @@ def render_triangles_batch(vertices, texture_coords, faces, width, height):
 
     return depth_buffer, update_mask, tx_buffer, ty_buffer
 
+@jit
 def apply_texture(update_mask, tx_buffer, ty_buffer, texture):
     tx = jnp.where(update_mask, tx_buffer, 0)
     ty = jnp.where(update_mask, ty_buffer, 0)
@@ -99,6 +100,35 @@ def apply_texture(update_mask, tx_buffer, ty_buffer, texture):
 
     return jnp.where(update_mask[:, :, jnp.newaxis], color, jnp.zeros_like(color))
 
+@partial(jit, static_argnums=(3, 4, 5))
+def render_model(vertices, texture_coords, faces, width, height, batch_size, texture):
+    final_depth_buffer = jnp.full((height, width), -jnp.inf)
+    final_update_mask = jnp.zeros((height, width), dtype=bool)
+    final_tx_buffer = jnp.zeros((height, width))
+    final_ty_buffer = jnp.zeros((height, width))
+    
+    def render_batch(i, buffers):
+        final_depth_buffer, final_update_mask, final_tx_buffer, final_ty_buffer = buffers
+        start = i * batch_size
+        batch_faces = jax.lax.dynamic_slice(faces, (start, 0, 0), (batch_size, faces.shape[1], faces.shape[2]))
+        depth_buffer, update_mask, tx_buffer, ty_buffer = render_triangles_batch(vertices, texture_coords, batch_faces, width, height)
+        
+        new_pixels = update_mask & (depth_buffer > final_depth_buffer)
+        final_depth_buffer = jnp.where(new_pixels, depth_buffer, final_depth_buffer)
+        final_update_mask = final_update_mask | new_pixels
+        final_tx_buffer = jnp.where(new_pixels, tx_buffer, final_tx_buffer)
+        final_ty_buffer = jnp.where(new_pixels, ty_buffer, final_ty_buffer)
+        
+        return (final_depth_buffer, final_update_mask, final_tx_buffer, final_ty_buffer)
+    
+    num_batches = (faces.shape[0] + batch_size - 1) // batch_size
+    final_buffers = jax.lax.fori_loop(0, num_batches, render_batch, (final_depth_buffer, final_update_mask, final_tx_buffer, final_ty_buffer))
+    
+    final_depth_buffer, final_update_mask, final_tx_buffer, final_ty_buffer = final_buffers
+    image = apply_texture(final_update_mask, final_tx_buffer, final_ty_buffer, texture)
+    
+    return image
+
 def main():
     vertices, texture_coords, faces = parse_obj_file('african_head.obj')
     texture = jnp.array(Image.open('african_head_diffuse.tga'))
@@ -106,23 +136,7 @@ def main():
     width, height = 800, 600
     batch_size = 10  # Adjust this value based on your available memory
     
-    final_depth_buffer = jnp.full((height, width), -jnp.inf)
-    final_update_mask = jnp.zeros((height, width), dtype=bool)
-    final_tx_buffer = jnp.zeros((height, width))
-    final_ty_buffer = jnp.zeros((height, width))
-    
-    for i in range(0, len(faces), batch_size):
-        batch_faces = faces[i:i+batch_size]
-        depth_buffer, update_mask, tx_buffer, ty_buffer = render_triangles_batch(vertices, texture_coords, batch_faces, width, height)
-        
-        # Update final buffers based on depth test
-        new_pixels = update_mask & (depth_buffer > final_depth_buffer)
-        final_depth_buffer = jnp.where(new_pixels, depth_buffer, final_depth_buffer)
-        final_update_mask = final_update_mask | new_pixels
-        final_tx_buffer = jnp.where(new_pixels, tx_buffer, final_tx_buffer)
-        final_ty_buffer = jnp.where(new_pixels, ty_buffer, final_ty_buffer)
-    
-    image = apply_texture(final_update_mask, final_tx_buffer, final_ty_buffer, texture)
+    image = render_model(vertices, texture_coords, faces, width, height, batch_size, texture)
     
     Image.fromarray(np.array(image)).save('output.png')
 

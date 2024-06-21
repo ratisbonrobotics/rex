@@ -81,14 +81,14 @@ def render_triangles_batch(vertices, texture_coords, faces, width, height):
 
         return (new_depth_buffer, new_update_mask, new_tx_buffer, new_ty_buffer), None
 
-    depth_buffer = jnp.full((height, width), float('-inf'))
+    depth_buffer = jnp.full((height, width), -jnp.inf)  # Initialize with negative infinity
     update_mask = jnp.zeros((height, width), dtype=bool)
     tx_buffer = jnp.zeros((height, width))
     ty_buffer = jnp.zeros((height, width))
 
     (depth_buffer, update_mask, tx_buffer, ty_buffer), _ = jax.lax.scan(update_buffers, (depth_buffer, update_mask, tx_buffer, ty_buffer), (mask, depth, tx, ty))
 
-    return update_mask, tx_buffer, ty_buffer
+    return depth_buffer, update_mask, tx_buffer, ty_buffer
 
 def apply_texture(update_mask, tx_buffer, ty_buffer, texture):
     tx = jnp.where(update_mask, tx_buffer, 0)
@@ -106,17 +106,21 @@ def main():
     width, height = 800, 600
     batch_size = 10  # Adjust this value based on your available memory
     
+    final_depth_buffer = jnp.full((height, width), -jnp.inf)
     final_update_mask = jnp.zeros((height, width), dtype=bool)
     final_tx_buffer = jnp.zeros((height, width))
     final_ty_buffer = jnp.zeros((height, width))
     
     for i in range(0, len(faces), batch_size):
         batch_faces = faces[i:i+batch_size]
-        update_mask, tx_buffer, ty_buffer = render_triangles_batch(vertices, texture_coords, batch_faces, width, height)
+        depth_buffer, update_mask, tx_buffer, ty_buffer = render_triangles_batch(vertices, texture_coords, batch_faces, width, height)
         
-        final_update_mask = final_update_mask | update_mask
-        final_tx_buffer = jnp.where(update_mask, tx_buffer, final_tx_buffer)
-        final_ty_buffer = jnp.where(update_mask, ty_buffer, final_ty_buffer)
+        # Update final buffers based on depth test
+        new_pixels = update_mask & (depth_buffer > final_depth_buffer)
+        final_depth_buffer = jnp.where(new_pixels, depth_buffer, final_depth_buffer)
+        final_update_mask = final_update_mask | new_pixels
+        final_tx_buffer = jnp.where(new_pixels, tx_buffer, final_tx_buffer)
+        final_ty_buffer = jnp.where(new_pixels, ty_buffer, final_ty_buffer)
     
     image = apply_texture(final_update_mask, final_tx_buffer, final_ty_buffer, texture)
     

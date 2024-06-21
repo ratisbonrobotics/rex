@@ -75,13 +75,6 @@ def render_triangle(v0, v1, v2, vt0, vt1, vt2, texture, width, height):
     colors, depths = vmap(vmap(process_pixel))(pixels)
     return colors, depths
 
-@jit
-def update_buffers(image, depth_buffer, colors, depths):
-    mask = depths > depth_buffer
-    new_image = jnp.where(mask[..., None], colors, image)
-    new_depth_buffer = jnp.where(mask, depths, depth_buffer)
-    return new_image, new_depth_buffer
-
 @partial(jit, static_argnums=(4, 5))
 def render_triangles(vertices, texture_coords, faces, texture, width, height):
     image = jnp.zeros((height, width, 3), dtype=jnp.float32)
@@ -93,7 +86,12 @@ def render_triangles(vertices, texture_coords, faces, texture, width, height):
         vt0, vt1, vt2 = texture_coords[face[:, 1]]
 
         colors, depths = render_triangle(v0, v1, v2, vt0, vt1, vt2, texture, width, height)
-        new_image, new_depth_buffer = update_buffers(image, depth_buffer, colors, depths)
+        
+        # Inlined update_buffers
+        mask = depths > depth_buffer
+        new_image = jnp.where(mask[..., None], colors, image)
+        new_depth_buffer = jnp.where(mask, depths, depth_buffer)
+        
         return (new_image, new_depth_buffer), None
 
     (final_image, _), _ = jax.lax.scan(render_face, (image, depth_buffer), faces)

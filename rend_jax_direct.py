@@ -1,112 +1,92 @@
 import jax
 import jax.numpy as jnp
 from jax import jit, vmap
-from PIL import Image
 from functools import partial
+from PIL import Image
 import numpy as np
 
 def parse_obj_file(file_path):
-    vertices = []
-    texture_coords = []
-    faces = []
-
+    vertices, texture_coords, faces = [], [], []
     with open(file_path, 'r') as file:
         for line in file:
-            if line.startswith('v '):
-                vertex = [float(coord) for coord in line.split()[1:]]
-                vertices.append(vertex)
-            elif line.startswith('vt '):
-                texture_coord = [float(coord) for coord in line.split()[1:]]
-                texture_coords.append(texture_coord)
+            if line.startswith('v '): vertices.append([float(coord) for coord in line.split()[1:]])
+            elif line.startswith('vt '): texture_coords.append([float(coord) for coord in line.split()[1:]])
             elif line.startswith('f '):
                 face = []
                 for vertex_index in line.split()[1:]:
                     indices = vertex_index.split('/')
-                    vertex_index = int(indices[0]) - 1
-                    texture_index = int(indices[1]) - 1 if len(indices) > 1 else None
-                    face.append((vertex_index, texture_index))
+                    face.append((int(indices[0]) - 1, int(indices[1]) - 1 if len(indices) > 1 else None))
                 faces.append(face)
-
     return jnp.array(vertices), jnp.array(texture_coords), jnp.array(faces)
 
-@partial(jit, static_argnums=(7, 8))
-def render_triangle(v0, v1, v2, vt0, vt1, vt2, texture, width, height):
-    # Convert vertex coordinates to screen space
-    v0 = jnp.array([(v0[0] + 1) * width / 2, (1 - v0[1]) * height / 2, v0[2]])
-    v1 = jnp.array([(v1[0] + 1) * width / 2, (1 - v1[1]) * height / 2, v1[2]])
-    v2 = jnp.array([(v2[0] + 1) * width / 2, (1 - v2[1]) * height / 2, v2[2]])
+@partial(jit, static_argnums=(3, 4))
+def rasterize_triangle(vertices, texture_coords, face, width, height):
+    v0, v1, v2 = [vertices[i] for i, _ in face]
+    vt0, vt1, vt2 = [texture_coords[i] for _, i in face if i is not None]
 
-    # Create a grid of all pixels
-    x = jnp.arange(width)
-    y = jnp.arange(height)
-    xx, yy = jnp.meshgrid(x, y)
-    pixels = jnp.stack([xx, yy], axis=-1)
+    # Convert to screen space
+    v0 = ((v0[0] + 1) * width / 2, (1 - v0[1]) * height / 2, v0[2])
+    v1 = ((v1[0] + 1) * width / 2, (1 - v1[1]) * height / 2, v1[2])
+    v2 = ((v2[0] + 1) * width / 2, (1 - v2[1]) * height / 2, v2[2])
 
-    def process_pixel(pixel):
-        # Inlined barycentric_coordinates
-        v0v1 = v1[:2] - v0[:2]
-        v0v2 = v2[:2] - v0[:2]
-        v0p = pixel - v0[:2]
-        d00 = jnp.dot(v0v1, v0v1)
-        d01 = jnp.dot(v0v1, v0v2)
-        d11 = jnp.dot(v0v2, v0v2)
-        d20 = jnp.dot(v0p, v0v1)
-        d21 = jnp.dot(v0p, v0v2)
-        denom = d00 * d11 - d01 * d01
-        v = (d11 * d20 - d01 * d21) / denom
-        w = (d00 * d21 - d01 * d20) / denom
-        u = 1.0 - v - w
-        barycentric = jnp.array([u, v, w])
+    def edge_function(a, b, c):
+        return (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])
 
-        # Inlined is_inside_triangle
-        inside = jnp.all(barycentric >= 0) & jnp.all(barycentric <= 1)
+    def inside_triangle(p):
+        w0 = edge_function(v1, v2, p)
+        w1 = edge_function(v2, v0, p)
+        w2 = edge_function(v0, v1, p)
+        return (w0 >= 0) & (w1 >= 0) & (w2 >= 0)
 
-        depth = jnp.dot(barycentric, jnp.array([v0[2], v1[2], v2[2]]))
-        tx = jnp.dot(barycentric, jnp.array([vt0[0], vt1[0], vt2[0]]))
-        ty = jnp.dot(barycentric, jnp.array([vt0[1], vt1[1], vt2[1]]))
+    x, y = jnp.meshgrid(jnp.arange(width), jnp.arange(height))
+    points = jnp.stack([x, y], axis=-1)
 
-        # Inlined sample_texture
-        tx = jnp.clip(tx * texture.shape[1], 0, texture.shape[1] - 1).astype(jnp.int32)
-        ty = jnp.clip((1 - ty) * texture.shape[0], 0, texture.shape[0] - 1).astype(jnp.int32)
-        color = texture[ty, tx]
+    mask = vmap(vmap(inside_triangle))(points)
 
-        return jnp.where(inside, color, jnp.array([0, 0, 0])), jnp.where(inside, depth, -jnp.inf)
+    area = edge_function(v0, v1, v2)
+    w0 = vmap(vmap(lambda p: edge_function(v1, v2, p)))(points) / area
+    w1 = vmap(vmap(lambda p: edge_function(v2, v0, p)))(points) / area
+    w2 = 1 - w0 - w1
 
-    colors, depths = vmap(vmap(process_pixel))(pixels)
-    return colors, depths
+    depth = w0 * v0[2] + w1 * v1[2] + w2 * v2[2]
+    tx = w0 * vt0[0] + w1 * vt1[0] + w2 * vt2[0]
+    ty = 1 - (w0 * vt0[1] + w1 * vt1[1] + w2 * vt2[1])
 
-@partial(jit, static_argnums=(4, 5))
-def render_triangles(vertices, texture_coords, faces, texture, width, height):
-    image = jnp.zeros((height, width, 3), dtype=jnp.float32)
+    return mask, depth, tx, ty
+
+@partial(jit, static_argnums=(3, 4))
+def render_model(vertices, texture_coords, faces, width, height, texture):
     depth_buffer = jnp.full((height, width), -jnp.inf)
+    color_buffer = jnp.zeros((height, width, 3), dtype=jnp.uint8)
 
-    def render_face(carry, face):
-        image, depth_buffer = carry
-        v0, v1, v2 = vertices[face[:, 0]]
-        vt0, vt1, vt2 = texture_coords[face[:, 1]]
-
-        colors, depths = render_triangle(v0, v1, v2, vt0, vt1, vt2, texture, width, height)
+    def render_face(buffers, face):
+        depth_buffer, color_buffer = buffers
+        mask, depth, tx, ty = rasterize_triangle(vertices, texture_coords, face, width, height)
         
-        # Inlined update_buffers
-        mask = depths > depth_buffer
-        new_image = jnp.where(mask[..., None], colors, image)
-        new_depth_buffer = jnp.where(mask, depths, depth_buffer)
+        update = mask & (depth > depth_buffer)
+        depth_buffer = jnp.where(update, depth, depth_buffer)
         
-        return (new_image, new_depth_buffer), None
+        tx_clipped = jnp.clip(tx * texture.shape[1], 0, texture.shape[1] - 1).astype(jnp.int32)
+        ty_clipped = jnp.clip(ty * texture.shape[0], 0, texture.shape[0] - 1).astype(jnp.int32)
+        color = texture[ty_clipped, tx_clipped]
+        
+        color_buffer = jnp.where(update[:, :, jnp.newaxis], color, color_buffer)
+        
+        return (depth_buffer, color_buffer), None
 
-    (final_image, _), _ = jax.lax.scan(render_face, (image, depth_buffer), faces)
-    return final_image
+    (_, final_color_buffer), _ = jax.lax.scan(render_face, (depth_buffer, color_buffer), faces)
+    
+    return final_color_buffer
 
 def main():
     vertices, texture_coords, faces = parse_obj_file('african_head.obj')
-    texture = jnp.array(Image.open('african_head_diffuse.tga')).astype(jnp.float32) / 255.0
+    texture = jnp.array(Image.open('african_head_diffuse.tga'))
     
-    image = render_triangles(vertices, texture_coords, faces, texture, 800, 600)
+    width, height = 800, 600
     
-    # Convert the JAX array to a NumPy array, then to a PIL Image
-    numpy_image = (np.array(image) * 255).astype(np.uint8)
-    output_image = Image.fromarray(numpy_image)
-    output_image.save('output.png')
+    image = render_model(vertices, texture_coords, faces, width, height, texture)
+    
+    Image.fromarray(np.array(image)).save('output.png')
 
 if __name__ == '__main__':
     main()

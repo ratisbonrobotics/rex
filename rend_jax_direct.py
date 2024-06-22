@@ -32,22 +32,15 @@ def rasterize_triangle(vertices, texture_coords, face, width, height):
     def edge_function(a, b, c):
         return (c[0] - a[0]) * (b[1] - a[1]) - (c[1] - a[1]) * (b[0] - a[0])
 
-    def inside_triangle(p):
-        w0 = edge_function(v1, v2, p)
-        w1 = edge_function(v2, v0, p)
-        w2 = edge_function(v0, v1, p)
-        return (w0 >= 0) & (w1 >= 0) & (w2 >= 0)
-
     x, y = jnp.meshgrid(jnp.arange(width), jnp.arange(height))
     points = jnp.stack([x, y], axis=-1)
-
-    mask = vmap(vmap(inside_triangle))(points)
 
     area = edge_function(v0, v1, v2)
     w0 = vmap(vmap(lambda p: edge_function(v1, v2, p)))(points) / area
     w1 = vmap(vmap(lambda p: edge_function(v2, v0, p)))(points) / area
     w2 = 1 - w0 - w1
 
+    mask = (w0 >= 0) & (w1 >= 0) & (w2 >= 0)
     depth = w0 * v0[2] + w1 * v1[2] + w2 * v2[2]
     tx = w0 * vt0[0] + w1 * vt1[0] + w2 * vt2[0]
     ty = 1 - (w0 * vt0[1] + w1 * vt1[1] + w2 * vt2[1])

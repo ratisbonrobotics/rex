@@ -90,16 +90,6 @@ def render_triangles_batch(vertices, texture_coords, faces, width, height):
 
     return depth_buffer, update_mask, tx_buffer, ty_buffer
 
-@jit
-def apply_texture(update_mask, tx_buffer, ty_buffer, texture):
-    tx = jnp.where(update_mask, tx_buffer, 0)
-    ty = jnp.where(update_mask, ty_buffer, 0)
-
-    color = texture[jnp.clip(ty * texture.shape[0], 0, texture.shape[0] - 1).astype(jnp.int32),
-                    jnp.clip(tx * texture.shape[1], 0, texture.shape[1] - 1).astype(jnp.int32)]
-
-    return jnp.where(update_mask[:, :, jnp.newaxis], color, jnp.zeros_like(color))
-
 @partial(jit, static_argnums=(3, 4, 5))
 def render_model(vertices, texture_coords, faces, width, height, batch_size, texture):
     final_depth_buffer = jnp.full((height, width), -jnp.inf)
@@ -125,7 +115,15 @@ def render_model(vertices, texture_coords, faces, width, height, batch_size, tex
     final_buffers = jax.lax.fori_loop(0, num_batches, render_batch, (final_depth_buffer, final_update_mask, final_tx_buffer, final_ty_buffer))
     
     final_depth_buffer, final_update_mask, final_tx_buffer, final_ty_buffer = final_buffers
-    image = apply_texture(final_update_mask, final_tx_buffer, final_ty_buffer, texture)
+    
+    # Inlined apply_texture function
+    tx = jnp.where(final_update_mask, final_tx_buffer, 0)
+    ty = jnp.where(final_update_mask, final_ty_buffer, 0)
+
+    color = texture[jnp.clip(ty * texture.shape[0], 0, texture.shape[0] - 1).astype(jnp.int32),
+                    jnp.clip(tx * texture.shape[1], 0, texture.shape[1] - 1).astype(jnp.int32)]
+
+    image = jnp.where(final_update_mask[:, :, jnp.newaxis], color, jnp.zeros_like(color))
     
     return image
 

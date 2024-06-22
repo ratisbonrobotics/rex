@@ -64,48 +64,36 @@ def render_triangle(vertices, texture_coords, face, width, height):
 
     return mask, depth, tx, ty
 
-@partial(jit, static_argnums=(3, 4))
-def render_triangles_batch(vertices, texture_coords, faces, width, height):
-    render_triangle_vmap = vmap(render_triangle, in_axes=(None, None, 0, None, None))
-    mask, depth, tx, ty = render_triangle_vmap(vertices, texture_coords, faces, width, height)
-
-    def combine_triangles(carry, x):
-        a_mask, a_depth, a_tx, a_ty = carry
-        b_mask, b_depth, b_tx, b_ty = x
-        
-        update_mask = b_mask & (b_depth > a_depth)
-        new_mask = a_mask | b_mask
-        new_depth = jnp.where(update_mask, b_depth, a_depth)
-        new_tx = jnp.where(update_mask, b_tx, a_tx)
-        new_ty = jnp.where(update_mask, b_ty, a_ty)
-        
-        return (new_mask, new_depth, new_tx, new_ty), None
-
-    initial_values = (
-        jnp.zeros((height, width), dtype=bool),
-        jnp.full((height, width), -jnp.inf),
-        jnp.zeros((height, width)),
-        jnp.zeros((height, width))
-    )
-
-    (final_mask, final_depth, final_tx, final_ty), _ = jax.lax.scan(
-        combine_triangles,
-        initial_values,
-        (mask, depth, tx, ty)
-    )
-
-    return final_mask, final_depth, final_tx, final_ty
-
 @partial(jit, static_argnums=(3, 4, 5))
 def render_model(vertices, texture_coords, faces, width, height, batch_size, texture):
     num_batches = (faces.shape[0] + batch_size - 1) // batch_size
+    
+    render_triangle_vmap = vmap(render_triangle, in_axes=(None, None, 0, None, None))
     
     def render_and_update(buffers, i):
         depth_buffer, update_mask, tx_buffer, ty_buffer = buffers
         start = i * batch_size
         batch_faces = jax.lax.dynamic_slice(faces, (start, 0, 0), (batch_size, faces.shape[1], faces.shape[2]))
         
-        new_mask, new_depth, new_tx, new_ty = render_triangles_batch(vertices, texture_coords, batch_faces, width, height)
+        mask, depth, tx, ty = render_triangle_vmap(vertices, texture_coords, batch_faces, width, height)
+        
+        def combine_triangles(carry, x):
+            a_mask, a_depth, a_tx, a_ty = carry
+            b_mask, b_depth, b_tx, b_ty = x
+            
+            update_mask = b_mask & (b_depth > a_depth)
+            new_mask = a_mask | b_mask
+            new_depth = jnp.where(update_mask, b_depth, a_depth)
+            new_tx = jnp.where(update_mask, b_tx, a_tx)
+            new_ty = jnp.where(update_mask, b_ty, a_ty)
+            
+            return (new_mask, new_depth, new_tx, new_ty), None
+
+        (new_mask, new_depth, new_tx, new_ty), _ = jax.lax.scan(
+            combine_triangles,
+            (jnp.zeros_like(depth_buffer, dtype=bool), depth_buffer, tx_buffer, ty_buffer),
+            (mask, depth, tx, ty)
+        )
         
         new_pixels = new_mask & (new_depth > depth_buffer)
         depth_buffer = jnp.where(new_pixels, new_depth, depth_buffer)
@@ -122,7 +110,7 @@ def render_model(vertices, texture_coords, faces, width, height, batch_size, tex
         jnp.zeros((height, width))
     )
     
-    (final_depth_buffer, final_update_mask, final_tx_buffer, final_ty_buffer), _ = jax.lax.scan(
+    (_, final_update_mask, final_tx_buffer, final_ty_buffer), _ = jax.lax.scan(
         render_and_update, initial_buffers, jnp.arange(num_batches)
     )
     

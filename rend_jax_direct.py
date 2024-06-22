@@ -135,8 +135,13 @@ def render_model(vertices, texture_coords, faces, width, height, texture, mvp_ma
     return final_color_buffer
 
 def main():
-    vertices, texture_coords, faces = parse_obj_file('african_head.obj')
-    texture = jnp.array(Image.open('african_head_diffuse.tga'))
+    # Load African head model
+    vertices1, texture_coords1, faces1 = parse_obj_file('african_head.obj')
+    texture1 = jnp.array(Image.open('african_head_diffuse.tga'))
+
+    # Load African head model
+    vertices2, texture_coords2, faces2 = parse_obj_file('african_head.obj')
+    texture2 = jnp.array(Image.open('african_head_diffuse.tga'))
     
     width, height = 800, 600
     aspect_ratio = width / height
@@ -144,15 +149,33 @@ def main():
     near = 0.1
     far = 100.0
     
-    model_matrix = create_model_matrix(scale=[1, 1, 1], rotation=[0, 1, 0], translation=[0, 0, -3])
     view_matrix = create_view_matrix(eye=jnp.array([0, 0, 3]), center=jnp.array([0, 0, 0]), up=jnp.array([0, 1, 0]))
     projection_matrix = create_projection_matrix(fov, aspect_ratio, near, far)
     
-    mvp_matrix = projection_matrix @ view_matrix @ model_matrix
+    # Create two different model matrices
+    model_matrix1 = create_model_matrix(scale=[1, 1, 1], rotation=[0, 1, 0], translation=[0, 0, -3])
+    model_matrix2 = create_model_matrix(scale=[1, 1, 1], rotation=[0, 2, 0], translation=[0, 0, -3])
     
-    image = render_model(vertices, texture_coords, faces, width, height, texture, mvp_matrix)
+    mvp_matrix1 = projection_matrix @ view_matrix @ model_matrix1
+    mvp_matrix2 = projection_matrix @ view_matrix @ model_matrix2
     
-    Image.fromarray(np.array(image)).save('output.png')
+    # Vmap the render_model function
+    batched_render_model = vmap(render_model, in_axes=(0, 0, 0, None, None, 0, 0))
+    
+    # Render both models in parallel
+    images = batched_render_model(
+        jnp.stack([vertices1, vertices2]),
+        jnp.stack([texture_coords1, texture_coords2]),
+        jnp.stack([faces1, faces2]),
+        width,
+        height,
+        jnp.stack([texture1, texture2]),
+        jnp.stack([mvp_matrix1, mvp_matrix2])
+    )
+    
+    # Save both images
+    Image.fromarray(np.array(images[0])).save('output_1.png')
+    Image.fromarray(np.array(images[1])).save('output_2.png')
 
 if __name__ == '__main__':
     main()

@@ -80,8 +80,8 @@ __global__ void ray_trace_kernel(Triangle* triangles, int num_triangles, unsigne
     float camera_y = (1.0f - 2.0f * (y + 0.5f) / height) * tan_fov;
 
     Ray ray;
-    ray.origin = Vec3f(0, 0, -3);
-    ray.direction = Vec3f(camera_x, camera_y, 1).normalize();
+    ray.origin = Vec3f(0, 0, 3);  // Move camera to positive z-axis
+    ray.direction = Vec3f(camera_x, camera_y, -1).normalize();  // Look towards negative z-axis
 
     Vec3f color(0.2f, 0.2f, 0.2f); // Ambient light
     float closest_t = FLT_MAX;
@@ -107,10 +107,10 @@ __global__ void ray_trace_kernel(Triangle* triangles, int num_triangles, unsigne
                 tex_color.y = texture[(tex_y * tex_width + tex_x) * 3 + 1] / 255.0f;
                 tex_color.z = texture[(tex_y * tex_width + tex_x) * 3 + 2] / 255.0f;
 
-                Vec3f light_dir = Vec3f(0, 0, -1).normalize();
+                Vec3f light_dir = Vec3f(1, 1, 1).normalize();  // Light direction from top-right-front
                 float diffuse = max(0.0f, triangles[i].normal.dot(light_dir));
 
-                color = tex_color * (0.2f + 0.8f * diffuse);
+                color = tex_color * (0.3f + 0.7f * diffuse);  // Adjusted ambient and diffuse factors
             }
         }
     }

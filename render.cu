@@ -1,15 +1,18 @@
 #include <cuda_runtime.h>
+#include <device_launch_parameters.h>
 #include <stdio.h>
-#include <stdlib.h>
-#include <math.h>
 #include <vector>
 #include <fstream>
 #include <sstream>
+#include <string>
 #include <algorithm>
 #define STB_IMAGE_IMPLEMENTATION
 #include "stb_image.h"
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
+#include <cfloat>
+
+#define CHECK_CUDA(call) { cudaError_t err = call; if (err != cudaSuccess) { printf("CUDA error: %s, line %d\n", cudaGetErrorString(err), __LINE__); exit(1); } }
 
 struct Vec3f {
     float x, y, z;
@@ -19,83 +22,99 @@ struct Vec2f {
     float u, v;
 };
 
-struct Face {
-    int v[3];
-    int vt[3];
+struct Triangle {
+    Vec3f v[3];
+    Vec2f uv[3];
 };
 
-__global__ void renderTriangles(Vec3f* d_vertices, Vec2f* d_texture_coords, Face* d_faces, 
-                                unsigned char* d_texture, int texture_width, int texture_height,
-                                unsigned char* d_image, float* d_depth_buffer,
-                                int width, int height, int num_faces) {
-    int idx = blockIdx.x * blockDim.x + threadIdx.x;
-    if (idx >= num_faces) return;
+__device__ float edge_function(float x0, float y0, float x1, float y1, float x2, float y2) {
+    return (x2 - x0) * (y1 - y0) - (x1 - x0) * (y2 - y0);
+}
 
-    Face face = d_faces[idx];
-    Vec3f v0 = d_vertices[face.v[0]];
-    Vec3f v1 = d_vertices[face.v[1]];
-    Vec3f v2 = d_vertices[face.v[2]];
-    Vec2f vt0 = d_texture_coords[face.vt[0]];
-    Vec2f vt1 = d_texture_coords[face.vt[1]];
-    Vec2f vt2 = d_texture_coords[face.vt[2]];
+__device__ Vec3f barycentric(float x, float y, const Vec3f& v0, const Vec3f& v1, const Vec3f& v2) {
+    Vec3f u = {
+        (v2.x - v0.x) * (v1.y - v0.y) - (v2.y - v0.y) * (v1.x - v0.x),
+        (v2.x - v0.x) * (y - v0.y) - (v2.y - v0.y) * (x - v0.x),
+        (x - v0.x) * (v1.y - v0.y) - (y - v0.y) * (v1.x - v0.x)
+    };
+    if (abs(u.x) < 1e-5) return {-1, 1, 1};
+    return {1.f - (u.y + u.z) / u.x, u.y / u.x, u.z / u.x};
+}
 
-    // Convert vertex coordinates to screen space
-    v0.x = (v0.x + 1) * width / 2;
-    v0.y = (1 - v0.y) * height / 2;
-    v1.x = (v1.x + 1) * width / 2;
-    v1.y = (1 - v1.y) * height / 2;
-    v2.x = (v2.x + 1) * width / 2;
-    v2.y = (1 - v2.y) * height / 2;
+__global__ void rasterize_kernel(Triangle* triangles, int num_triangles, unsigned char* texture, int tex_width, int tex_height, unsigned char* output, float* depth_buffer, int width, int height) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
 
-    // Calculate bounding box
-    int min_x = max(0, (int)min(min(v0.x, v1.x), v2.x));
-    int max_x = min(width - 1, (int)max(max(v0.x, v1.x), v2.x));
-    int min_y = max(0, (int)min(min(v0.y, v1.y), v2.y));
-    int max_y = min(height - 1, (int)max(max(v0.y, v1.y), v2.y));
+    if (x >= width || y >= height) return;
 
-    // Calculate edge function coefficients
-    float e01_x = v1.y - v0.y, e01_y = v0.x - v1.x, e01_z = v1.x * v0.y - v0.x * v1.y;
-    float e12_x = v2.y - v1.y, e12_y = v1.x - v2.x, e12_z = v2.x * v1.y - v1.x * v2.y;
-    float e20_x = v0.y - v2.y, e20_y = v2.x - v0.x, e20_z = v0.x * v2.y - v2.x * v0.y;
+    float min_depth = FLT_MAX;
+    Vec3f color = {0, 0, 0};
 
-    for (int y = min_y; y <= max_y; y++) {
-        for (int x = min_x; x <= max_x; x++) {
-            // Calculate barycentric coordinates
-            float w0 = e12_x * (x + 0.5f) + e12_y * (y + 0.5f) + e12_z;
-            float w1 = e20_x * (x + 0.5f) + e20_y * (y + 0.5f) + e20_z;
-            float w2 = e01_x * (x + 0.5f) + e01_y * (y + 0.5f) + e01_z;
+    for (int i = 0; i < num_triangles; i++) {
+        Triangle tri = triangles[i];
 
-            if (w0 >= 0 && w1 >= 0 && w2 >= 0) {
-                // Pixel is inside the triangle
-                float w = w0 + w1 + w2;
-                w0 /= w; w1 /= w; w2 /= w;
-                float depth = w0 * v0.z + w1 * v1.z + w2 * v2.z;
+        Vec3f bc_screen = barycentric(x, y, tri.v[0], tri.v[1], tri.v[2]);
+        if (bc_screen.x < 0 || bc_screen.y < 0 || bc_screen.z < 0) continue;
 
-                if (depth > d_depth_buffer[y * width + x]) {
-                    d_depth_buffer[y * width + x] = depth;
+        float depth = bc_screen.x * tri.v[0].z + bc_screen.y * tri.v[1].z + bc_screen.z * tri.v[2].z;
 
-                    // Calculate texture coordinates
-                    float tx = w0 * vt0.u + w1 * vt1.u + w2 * vt2.u;
-                    float ty = 1 - (w0 * vt0.v + w1 * vt1.v + w2 * vt2.v);
+        if (depth < depth_buffer[y * width + x]) {
+            depth_buffer[y * width + x] = depth;
 
-                    // Sample texture
-                    int tex_x = max(0, min((int)(tx * texture_width), texture_width - 1));
-                    int tex_y = max(0, min((int)(ty * texture_height), texture_height - 1));
-                    int tex_idx = (tex_y * texture_width + tex_x) * 3;
+            float u = bc_screen.x * tri.uv[0].u + bc_screen.y * tri.uv[1].u + bc_screen.z * tri.uv[2].u;
+            float v = bc_screen.x * tri.uv[0].v + bc_screen.y * tri.uv[1].v + bc_screen.z * tri.uv[2].v;
 
-                    // Set pixel color
-                    int img_idx = (y * width + x) * 3;
-                    d_image[img_idx] = d_texture[tex_idx];
-                    d_image[img_idx + 1] = d_texture[tex_idx + 1];
-                    d_image[img_idx + 2] = d_texture[tex_idx + 2];
-                }
+            int tex_x = u * tex_width;
+            int tex_y = v * tex_height;
+
+            if (tex_x >= 0 && tex_x < tex_width && tex_y >= 0 && tex_y < tex_height) {
+                color.x = texture[(tex_y * tex_width + tex_x) * 3 + 0] / 255.0f;
+                color.y = texture[(tex_y * tex_width + tex_x) * 3 + 1] / 255.0f;
+                color.z = texture[(tex_y * tex_width + tex_x) * 3 + 2] / 255.0f;
+            } else {
+                // Simple lighting if texture coordinates are out of bounds
+                Vec3f normal = {0, 0, -1}; // Simplified normal
+                Vec3f light_dir = {0, 0, -1}; // Light coming from the camera
+                float intensity = max(0.f, normal.x * light_dir.x + normal.y * light_dir.y + normal.z * light_dir.z);
+                color = {intensity, intensity, intensity};
             }
+        }
+    }
+
+    output[(y * width + x) * 3 + 0] = static_cast<unsigned char>(color.x * 255);
+    output[(y * width + x) * 3 + 1] = static_cast<unsigned char>(color.y * 255);
+    output[(y * width + x) * 3 + 2] = static_cast<unsigned char>(color.z * 255);
+}
+
+void viewport_transform(std::vector<Triangle>& triangles, int width, int height) {
+    float scale = std::min(width, height) * 0.8f;  // Scale to 80% of the smaller dimension
+    float offsetX = width / 2.0f;
+    float offsetY = height / 2.0f;
+
+    for (auto& tri : triangles) {
+        for (int i = 0; i < 3; i++) {
+            // Flip z-coordinate to change handedness
+            tri.v[i].z = -tri.v[i].z;
+
+            // Scale and center the x and y coordinates
+            tri.v[i].x = (tri.v[i].x * scale) + offsetX;
+            tri.v[i].y = (-tri.v[i].y * scale) + offsetY;  // Negate y to flip vertically
         }
     }
 }
 
-void parseObjFile(const char* filename, std::vector<Vec3f>& vertices, std::vector<Vec2f>& texture_coords, std::vector<Face>& faces) {
+
+
+void load_obj(const char* filename, std::vector<Triangle>& triangles) {
     std::ifstream file(filename);
+    if (!file.is_open()) {
+        printf("Failed to open OBJ file\n");
+        return;
+    }
+
+    std::vector<Vec3f> vertices;
+    std::vector<Vec2f> texcoords;
+
     std::string line;
     while (std::getline(file, line)) {
         std::istringstream iss(line);
@@ -109,89 +128,91 @@ void parseObjFile(const char* filename, std::vector<Vec3f>& vertices, std::vecto
         } else if (type == "vt") {
             Vec2f vt;
             iss >> vt.u >> vt.v;
-            texture_coords.push_back(vt);
+            texcoords.push_back(vt);
         } else if (type == "f") {
-            Face f;
+            Triangle tri;
             for (int i = 0; i < 3; i++) {
-                std::string vertex;
-                iss >> vertex;
-                sscanf(vertex.c_str(), "%d/%d", &f.v[i], &f.vt[i]);
-                f.v[i]--; // OBJ indices start at 1
-                f.vt[i]--;
+                int v, vt, vn;
+                char slash;
+                iss >> v >> slash >> vt >> slash >> vn;
+                tri.v[i] = vertices[v - 1];
+                tri.uv[i] = texcoords[vt - 1];
             }
-            faces.push_back(f);
+            triangles.push_back(tri);
         }
     }
 }
 
-int main() {
-    std::vector<Vec3f> vertices;
-    std::vector<Vec2f> texture_coords;
-    std::vector<Face> faces;
-    parseObjFile("african_head.obj", vertices, texture_coords, faces);
+// Add this function to flip the texture vertically
+void flip_texture_vertically(unsigned char* texture, int width, int height, int channels) {
+    int row_size = width * channels;
+    unsigned char* temp_row = new unsigned char[row_size];
+    
+    for (int y = 0; y < height / 2; ++y) {
+        unsigned char* top_row = texture + y * row_size;
+        unsigned char* bottom_row = texture + (height - 1 - y) * row_size;
+        
+        // Swap rows
+        memcpy(temp_row, top_row, row_size);
+        memcpy(top_row, bottom_row, row_size);
+        memcpy(bottom_row, temp_row, row_size);
+    }
+    
+    delete[] temp_row;
+}
 
-    int width, height, channels;
-    unsigned char* texture = stbi_load("african_head_diffuse.tga", &width, &height, &channels, 3);
+int main() {
+    const int width = 800;
+    const int height = 600;
+
+    std::vector<Triangle> triangles;
+    load_obj("african_head.obj", triangles);
+    viewport_transform(triangles, width, height);
+
+    printf("Loaded %zu triangles\n", triangles.size());
+
+    int tex_width, tex_height, tex_channels;
+    unsigned char* texture = stbi_load("african_head_diffuse.tga", &tex_width, &tex_height, &tex_channels, 3);
     if (!texture) {
-        fprintf(stderr, "Failed to load texture\n");
+        printf("Failed to load texture\n");
         return 1;
     }
+    printf("Loaded texture: %dx%d, %d channels\n", tex_width, tex_height, tex_channels);
 
-    int img_width = 800, img_height = 600;
-    unsigned char* image = new unsigned char[img_width * img_height * 3];
-    float* depth_buffer = new float[img_width * img_height];
-    for (int i = 0; i < img_width * img_height; i++) {
-        depth_buffer[i] = -INFINITY;
-    }
+    // Flip the texture vertically
+    flip_texture_vertically(texture, tex_width, tex_height, 3);
 
-    // Allocate device memory
-    Vec3f* d_vertices;
-    Vec2f* d_texture_coords;
-    Face* d_faces;
+    Triangle* d_triangles;
     unsigned char* d_texture;
-    unsigned char* d_image;
+    unsigned char* d_output;
     float* d_depth_buffer;
 
-    cudaMalloc(&d_vertices, vertices.size() * sizeof(Vec3f));
-    cudaMalloc(&d_texture_coords, texture_coords.size() * sizeof(Vec2f));
-    cudaMalloc(&d_faces, faces.size() * sizeof(Face));
-    cudaMalloc(&d_texture, width * height * 3 * sizeof(unsigned char));
-    cudaMalloc(&d_image, img_width * img_height * 3 * sizeof(unsigned char));
-    cudaMalloc(&d_depth_buffer, img_width * img_height * sizeof(float));
+    CHECK_CUDA(cudaMalloc(&d_triangles, triangles.size() * sizeof(Triangle)));
+    CHECK_CUDA(cudaMalloc(&d_texture, tex_width * tex_height * 3 * sizeof(unsigned char)));
+    CHECK_CUDA(cudaMalloc(&d_output, width * height * 3 * sizeof(unsigned char)));
+    CHECK_CUDA(cudaMalloc(&d_depth_buffer, width * height * sizeof(float)));
 
-    // Copy data to device
-    cudaMemcpy(d_vertices, vertices.data(), vertices.size() * sizeof(Vec3f), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_texture_coords, texture_coords.data(), texture_coords.size() * sizeof(Vec2f), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_faces, faces.data(), faces.size() * sizeof(Face), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_texture, texture, width * height * 3 * sizeof(unsigned char), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_depth_buffer, depth_buffer, img_width * img_height * sizeof(float), cudaMemcpyHostToDevice);
+    CHECK_CUDA(cudaMemcpy(d_triangles, triangles.data(), triangles.size() * sizeof(Triangle), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemcpy(d_texture, texture, tex_width * tex_height * 3 * sizeof(unsigned char), cudaMemcpyHostToDevice));
+    CHECK_CUDA(cudaMemset(d_output, 0, width * height * 3 * sizeof(unsigned char))); // Clear output buffer
+    CHECK_CUDA(cudaMemset(d_depth_buffer, 0x7f, width * height * sizeof(float))); // Initialize depth buffer to "infinity"
 
-    // Launch kernel
-    int threadsPerBlock = 256;
-    int blocksPerGrid = (faces.size() + threadsPerBlock - 1) / threadsPerBlock;
-    renderTriangles<<<blocksPerGrid, threadsPerBlock>>>(d_vertices, d_texture_coords, d_faces, 
-                                                        d_texture, width, height,
-                                                        d_image, d_depth_buffer,
-                                                        img_width, img_height, faces.size());
+    dim3 block_size(16, 16);
+    dim3 grid_size((width + block_size.x - 1) / block_size.x, (height + block_size.y - 1) / block_size.y);
 
-    // Copy result back to host
-    cudaMemcpy(image, d_image, img_width * img_height * 3 * sizeof(unsigned char), cudaMemcpyDeviceToHost);
+    rasterize_kernel<<<grid_size, block_size>>>(d_triangles, triangles.size(), d_texture, tex_width, tex_height, d_output, d_depth_buffer, width, height);
 
-    // Save image
-    stbi_write_png("output.png", img_width, img_height, 3, image, img_width * 3);
+    unsigned char* output = new unsigned char[width * height * 3];
+    CHECK_CUDA(cudaMemcpy(output, d_output, width * height * 3 * sizeof(unsigned char), cudaMemcpyDeviceToHost));
 
-    // Free device memory
-    cudaFree(d_vertices);
-    cudaFree(d_texture_coords);
-    cudaFree(d_faces);
-    cudaFree(d_texture);
-    cudaFree(d_image);
-    cudaFree(d_depth_buffer);
+    stbi_write_png("output.png", width, height, 3, output, width * 3);
 
-    // Free host memory
-    delete[] image;
-    delete[] depth_buffer;
+    delete[] output;
     stbi_image_free(texture);
+    CHECK_CUDA(cudaFree(d_triangles));
+    CHECK_CUDA(cudaFree(d_texture));
+    CHECK_CUDA(cudaFree(d_output));
+    CHECK_CUDA(cudaFree(d_depth_buffer));
 
     return 0;
 }

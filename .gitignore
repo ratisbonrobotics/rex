@@ -163,3 +163,4 @@ output*.png
 main
 *.ppm
 render
+rasterizer

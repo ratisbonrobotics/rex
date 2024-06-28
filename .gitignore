@@ -164,3 +164,4 @@ main
 *.ppm
 render
 rasterizer
+ray_tracer
